@@ -1,5 +1,19 @@
 package org.example;
 
+import org.apache.flink.api.common.functions.JoinFunction;
+import org.apache.flink.api.common.functions.MapFunction;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.api.java.typeutils.TypeExtractor;
+import org.apache.flink.streaming.api.TimeCharacteristic;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.functions.AssignerWithPunctuatedWatermarks;
+import org.apache.flink.streaming.api.watermark.Watermark;
+import org.example.join.JoinOperator;
+
+import javax.annotation.Nullable;
+
 /**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
@@ -18,54 +32,68 @@ package org.example;
  * limitations under the License.
  */
 
-import org.apache.flink.api.java.ExecutionEnvironment;
-
-/**
- * Skeleton for a Flink Job.
- *
- * For a full example of a Flink Job, see the WordCountJob.java file in the
- * same package/directory or have a look at the website.
- *
- * You can also generate a .jar file that you can submit on your Flink
- * cluster.
- * Just type
- * 		mvn clean package
- * in the projects root directory.
- * You will find the jar in
- * 		target/flink-quickstart-0.1-SNAPSHOT-Sample.jar
- *
- */
 public class Job {
 
 	public static void main(String[] args) throws Exception {
-		// set up the execution environment
-		final ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
+		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+		env.setParallelism(1);
 
+		env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
 
-		/**
-		 * Here, you can start creating your execution plan for Flink.
-		 *
-		 * Start with getting some data from the environment, like
-		 * 	env.readTextFile(textPath);
-		 *
-		 * then, transform the resulting DataSet<String> using operations
-		 * like
-		 * 	.filter()
-		 * 	.flatMap()
-		 * 	.join()
-		 * 	.coGroup()
-		 * and many more.
-		 * Have a look at the programming guide for the Java API:
-		 *
-		 * http://flink.apache.org/docs/latest/apis/batch/index.html
-		 *
-		 * and the examples
-		 *
-		 * http://flink.apache.org/docs/latest/apis/batch/examples.html
-		 *
-		 */
+		DataStream<Tuple2<Integer, Integer>> input1 = env.fromElements(1,2,3,4,5,6)
+			.map(new MapFunction<Integer, Tuple2<Integer, Integer>>() {
+				@Override
+				public Tuple2<Integer, Integer> map(Integer integer) throws Exception {
+					return Tuple2.of(integer % 2, integer);
+				}
+			}).assignTimestampsAndWatermarks(new AssignerWithPunctuatedWatermarks<Tuple2<Integer, Integer>>() {
+				@Nullable
+				@Override
+				public Watermark checkAndGetNextWatermark(Tuple2<Integer, Integer> integerIntegerTuple2, long l) {
+					return new Watermark(l);
+				}
 
-		// execute program
+				@Override
+				public long extractTimestamp(Tuple2<Integer, Integer> integerIntegerTuple2, long l) {
+					return integerIntegerTuple2.f1;
+				}
+			});
+
+		DataStream<Tuple2<Integer, Integer>> input2 = env.fromElements(3,5,6)
+			.map(new MapFunction<Integer, Tuple2<Integer, Integer>>() {
+				@Override
+				public Tuple2<Integer, Integer> map(Integer integer) throws Exception {
+					return Tuple2.of(integer % 2, integer);
+				}
+			}).assignTimestampsAndWatermarks(new AssignerWithPunctuatedWatermarks<Tuple2<Integer, Integer>>() {
+				@Nullable
+				@Override
+				public Watermark checkAndGetNextWatermark(Tuple2<Integer, Integer> integerIntegerTuple2, long l) {
+					return new Watermark(l);
+				}
+
+				@Override
+				public long extractTimestamp(Tuple2<Integer, Integer> integerIntegerTuple2, long l) {
+					return integerIntegerTuple2.f1;
+				}
+			});
+
+		TypeInformation<Tuple2<Integer, Integer>> outTypeInfo = TypeExtractor.getForObject(new Tuple2<>(1,1));
+		long windowLength = 3;
+
+		DataStream<Tuple2<Integer, Integer>> result = input1.connect(input2).keyBy(0,0).transform(
+			"customJoin",
+			outTypeInfo,
+			new JoinOperator<>(new JoinFunction<Tuple2<Integer, Integer>, Tuple2<Integer, Integer>, Tuple2<Integer, Integer>>() {
+				@Override
+				public Tuple2<Integer, Integer> join(Tuple2<Integer, Integer> left, Tuple2<Integer, Integer> right) throws Exception {
+					return Tuple2.of(left.f0, left.f1 + right.f1);
+				}
+			}, windowLength)
+		);
+
+		result.print();
+
 		env.execute("Flink Java API Skeleton");
 	}
 }
